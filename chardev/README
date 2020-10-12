@@ -1,0 +1,24 @@
+This module is a basic implementation of a character-based device. It registers a new driver for a device named "chardev", which will return the message:
+
+"I already told you <count> times Hello World!"
+
+Where <count> is the number of times the device file has been read. (For example, by using cat, etc.)
+
+To demonstrate this functionality, a new device file must be created with the 'mknod' command. When created, the device must be linked to this module using the Major driver number. This number will be printed in the init_module function after the module has been inserted (so just reference that output to create the device file.)
+
+Once the file has been created, we can use cat to test it's output:
+
+$ cat /dev/chardev
+I already told you 0 times Hello World!
+$ cat /dev/chardev
+I already told you 1 times Hello World!
+$ cat /dev/chardev
+I already told you 2 times Hello World!
+$ cat /dev/chardev
+I already told you 3 times Hello World!
+$ cat /dev/chardev
+I already told you 4 times Hello World!
+$ cat /dev/chardev
+I already told you 5 times Hello World!
+
+Once you're done, the module can be removed as normal, and the device file can be deleted.

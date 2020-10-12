@@ -1,0 +1,9 @@
+This module is basically a template for the simplest possible kernel module.
+
+It has two parameters: sum (int) and pow (int[]).
+sum will default to 10, while pow has no functional default value.
+These parameters can be provided by adding them after the module name when using the insmod command:
+
+sudo insmod example.ko sum=20 pow=2,8
+
+When the module is inserted, it will calculate the sum from i=1 to sum and print the value. If 2 values are provided for pow, it will also print the value of pow[0]^pow[1].

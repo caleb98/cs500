@@ -1,0 +1,12 @@
+This is a basic example of a module which uses the /proc virtual file system. Virtual files can be created in the /proc directory by a device driver to provide information to the user or system adminitrator.
+
+The Linux kernel makes creation of a virtual file here simple using the proc_create function. In this case, we use the function to make a virtual file /proc/myprocfs which returns only a string when read. The string will be in the format:
+
+"Hello #<count>!"
+
+Where <count> is the number of times the file has been read. (This functionality is similar to the chardev module, but uses a virtual file rather than creating a new device. However, it is fun to look at how each of these two modules implements the file_operations interface.)
+
+You can read the file as normal:
+
+$ cat /proc/myprocfs
+Hello #0!

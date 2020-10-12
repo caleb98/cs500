@@ -1,0 +1,22 @@
+This version of the /proc virtual file module shows how you can create virtual files which return more complex output than a simple string. This is done by implementing the seq_file interface using the seq_operations struct. (Documentation on this can be found here: https://github.com/torvalds/linux/blob/v4.9/Documentation/filesystems/seq_file.txt)
+
+In this case, the file will just return a value equal to the current reading position followed by a newline. This reading process is implemented by the following four methods: myproc_start, myproc_next, myproc_stop, and myproc_show.
+
+Since this virtual file never returns an eof character, using cat to read it will keep printing an ever-increasing number until you force-close it. A better way to see the output is to use dd:
+
+$ dd if=/proc/myprocfs count=1
+
+This will read a single block from the file and print that output to the console. To show that the virtual file is actually returning the read position (and not just incrementing an internal value) we can skip to a position in the file before reading.
+
+$ dd if=/proc/myprocfs skip=1 count=1
+
+This will skip 1 block into the file before reading. Since the read position printed as characters may overlap the edge of a block, it's possible that the first/last values printed using these commands may look weird. For example, something like
+
+$ dd if=/proc/myprocfs skip=1 count=1
+5
+156
+157
+158
+...
+
+In this case, the 5 printed on the first line is actually the end of the value 155, but since the "15" part of the string "155" crosses the edge of the first block, it gets cut off (so this behavior is expected, and not a flaw in the module.)
