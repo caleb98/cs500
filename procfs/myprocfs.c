@@ -103,7 +103,7 @@ static const struct seq_operations myseq_ops = {
 
 /*
  * Last function that we must implement for the
- * file_ops struct. This will just call seq_opn, which
+ * file_ops struct. This will just call seq_open, which
  * takes the seq_ops struct we just made and gets
  * ready to iterate through the virtual file.
  */
