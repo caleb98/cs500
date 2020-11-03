@@ -1,0 +1,68 @@
+This module is a custom extension of the chardev practice module.
+Some of the primary changes include:
+
+	1. Uses it's own device structure for storing a data buffer.
+	2. Can be initialized to support more than one device simultaneously.
+	3. Uses module parameters to modify device details
+	4. Implements the write file_operations function.
+	5. Uses header files for relevant definitions.
+
+The module itself is just a small character buffer. The default buffer
+size is 32 bytes, but can be set through the use of the device_buffer_size
+module paramter.
+
+After using insmod to insert the module, a message with the following
+format will be printed to the kernel logs:
+
+	pmod: Added pmod device XXX:YYY
+
+The XXX in this message is the major device number, and the YYY in the
+message is the minor number. To specify which device numbers should be
+requested from the kernel, use the module_major and module_minor params.
+
+By default, there will only be 1 line like this. However, if the user
+supplies a value for the num_devices parameter, more lines will be 
+printed with individual minor numbers for each registered device.
+
+To create a device file representing one of the registered devices, 
+use the following command:
+
+	mknod /dev/pmodYYY c XXX YYY
+
+Once again, XXX represents the major number printed above and YYY
+represents the minor number. If you set num_devices, you will need
+to run this command for each device in order to create a file for
+each device.
+
+For each fops function call in pmod, info is logged with printk. This
+lets you see each function call as it's happening and visualized how 
+the data is being sent to/from the user process to kernel space and 
+vice versa.
+It can be interesting to play with the dd command using if=/dev/pmod
+and see how these log values change for different block sizes.
+
+	dd bs=4 if=/dev/pmod
+	dd bs=8 if=/dev/pmod
+	dd bs=32 if=/dev/pmod
+	...
+	etc.
+
+Though you can easily play with the device files using cat and echo,
+this module also includes a program in the /test directory that
+can be used to easily read from and write to the /dev/pmod file. 
+(To use this program, obviously you need to register one of the 
+devices as the file /dev/pmod. To use different directories, just
+change the open() call in test.c).
+
+This test program is included to show how directly the open, close,
+read, and write system calls are connected to the module's 
+defined fops functions.
+
+This test program takes the following arguments:
+
+	test (w|r) [VALUE]
+
+Use w or r to specify whether you want to write or read to the
+device file, respectively. If choose to write, a string for the VALUE
+field must be provided - this is the string that will be written 
+to the device file.
