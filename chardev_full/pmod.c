@@ -8,7 +8,7 @@
 
 #include "pmod.h"
 
-MODULE_AUTHOR("Caleb Cassady <caleb.cassady17@gmail.com>");
+MODULE_AUTHOR("Caleb Cassady <caleb.cassady@hotmail.com>");
 MODULE_DESCRIPTION("A practice driver module.");
 MODULE_LICENSE("GPL");
 
@@ -98,8 +98,9 @@ static ssize_t pmod_write(struct file *filp, const char __user *buff, size_t cou
 
 	printk(KERN_INFO "pmod: pmod_write() called (count: %ld, pos: %lld)\n", count, *pos);
 
-	// Clear current device buffer
-	memset(dev->data, 0, device_buffer_size);
+	// Clear current device buffer if we're writing to the start of the file
+	if(*pos == 0)
+		memset(dev->data, 0, device_buffer_size);
 
 	// Make sure writing pos is within the buffer
 	if(*pos >= device_buffer_size) {
