@@ -7,10 +7,16 @@
 #define MODULE_MAJOR 0
 #define MODULE_MINOR 0
 #define NUM_DEVICES 1
-#define DEVICE_BUFFER_SIZE 32
+#define DATA_BLOCK_SIZE 32
+
+struct pmod_block {
+	char *block_data;
+	struct pmod_block *next;
+};
 
 struct pmod_dev {
-	char *data;
+	struct pmod_block *data;
+	int num_blocks;
 	int device_open;
 	struct cdev cdev;
 };

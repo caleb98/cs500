@@ -15,16 +15,89 @@ MODULE_LICENSE("GPL");
 static int module_major = MODULE_MAJOR;
 static int module_minor = MODULE_MINOR;
 static int num_devices = NUM_DEVICES;
-static int device_buffer_size = DEVICE_BUFFER_SIZE;
+static int data_block_size = DATA_BLOCK_SIZE;
 
 module_param(module_major, int, S_IRUGO);
 module_param(module_minor, int, S_IRUGO);
 module_param(num_devices, int, S_IRUGO);
-module_param(device_buffer_size, int, S_IRUGO);
+module_param(data_block_size, int, S_IRUGO);
 
 static dev_t dev_number;
 static struct pmod_dev *devices;
 static int device_open = 0;
+
+static void print_pmod_dev_info(struct pmod_dev *dev) 
+{
+	printk(KERN_INFO "pmod:\tdev->num_blocks = %d\n", dev->num_blocks);
+}
+
+/*
+ * Creates the required pmod_block structs in the given device.
+ * This method does not allocate space for the block_data field
+ * in the pmod_data struct.
+ */
+static struct pmod_block *pmod_get_block(struct pmod_dev *dev, int block_num) 
+{
+	struct pmod_block *block;
+
+	printk(KERN_INFO "pmod:\tpmod_get_block() called (getting block %d)\n", block_num);
+
+	// If the first block of data isn't allocated, go ahead and get the memory
+	if(!dev->data) {
+		printk(KERN_INFO "pmod:\t\tpmod_dev didn't have any data, so attempting first block allocation...\n");
+		dev->data = kmalloc(sizeof(struct pmod_block), GFP_KERNEL);
+		if(dev->data == NULL)
+			return NULL; // No memeory
+		memset(dev->data, 0, sizeof(struct pmod_block));
+
+		printk(KERN_INFO "pmod:\t\tallocation successful\n");
+
+		// We added a block, so increase num of blocks
+		dev->num_blocks++;	
+	}
+
+	block = dev->data;
+
+	// Loop to create the rest of the required blocks
+	while(0 < block_num--) {
+		if(!block->next) {
+			printk(KERN_INFO "pmod:\t\trequired block doesn't exist, attempting allocation...\n");
+			block->next = kmalloc(sizeof(struct pmod_block), GFP_KERNEL);
+			if(block->next == NULL)
+				return NULL;
+			memset(block->next, 0, sizeof(struct pmod_block));
+
+			printk(KERN_INFO "pmod:\t\tallocation successful\n");
+
+			// We added a block, so increase num of blocks
+			dev->num_blocks++;
+		}
+		block = block->next;
+	}
+
+	return block;
+}
+
+/*
+ * Clears out a device's blocks.
+ */
+static void pmod_trim(struct pmod_dev *dev)
+{
+	struct pmod_block *block, *next;
+
+	// Free each pmod_block, and it's block_data if it has any.
+	for(block = dev->data; block; block = next) {
+		if(block->block_data) {
+			kfree(block->block_data);
+			block->block_data = NULL;
+		}
+		next = block->next;
+		kfree(block);
+	}
+
+	// Set device blocks to 0
+	dev->num_blocks = 0;
+}
 
 static int pmod_open(struct inode *inode, struct file *filp) 
 {
@@ -65,62 +138,108 @@ static int pmod_release(struct inode *inode, struct file *filp)
 static ssize_t pmod_read(struct file *filp, char __user *buff, size_t count, loff_t *pos)
 {
 	struct pmod_dev *dev = filp->private_data;
+	struct pmod_block *block;
+	int block_num, block_pos;
 
 	printk(KERN_INFO "pmod: pmod_read() called (count: %ld, pos: %lld)\n", count, *pos);
+	print_pmod_dev_info(dev);
 
-	// Make sure reading pos is within buffer
-	if(*pos >= device_buffer_size) {
-		printk(KERN_INFO "pmod:\t\tRead position larger than buffer. No bytes read.\n");
+	// Get block number and pos
+	block_num = (long) *pos / data_block_size;
+	block_pos = (long) *pos % data_block_size;
+
+	printk(KERN_INFO "pmod:\tblock_num=%d, block_pos=%d\n", block_num, block_pos);
+
+	// Make sure our device has the required number of blocks
+	if(dev->num_blocks <= block_num) 
 		return 0;
+
+	// Get the block
+	block = pmod_get_block(dev, block_num);
+
+	// Make sure the block has data
+	if(!block || !block->block_data)
+		return 0;
+
+	printk(KERN_INFO "pmod:\tread found block %p\n", block);
+
+	// Only read to the end of this block
+	if(count > data_block_size - block_pos) {
+		count = data_block_size - block_pos;
+		printk(KERN_INFO "pmod:\ttrimming count to %ld\n", count);
 	}
 
-	// Make sure reading bound is within buffer
-	if(*pos + count > device_buffer_size) {
-		count = device_buffer_size - *pos;
-		printk(KERN_INFO "pmod:\t\tRead bounds outside buffer. Trimming read size: %ld\n", count);
-	}
+	printk(KERN_INFO "pmod:\tcopying data from kernel buffer to user buffer\n");
 
 	// Try to copy the data
-	if(copy_to_user(buff, dev->data + *pos, count)) {
+	if(copy_to_user(buff, block->block_data + block_pos, count)) {
 		return -EFAULT;
 	}
 
 	// Increase file position pointer
 	*pos += count;
+
+	print_pmod_dev_info(dev);
 
 	// Return num of bytes read
 	return count;
 }
 
-static ssize_t pmod_write(struct file *filp, const char __user *buff, size_t count, loff_t *pos)
+static ssize_t pmod_write(struct file *filp, const char __user *buf, size_t count, loff_t *pos)
 {
 	struct pmod_dev *dev = filp->private_data;
+	struct pmod_block *block;
+	int block_num, block_pos;
 
 	printk(KERN_INFO "pmod: pmod_write() called (count: %ld, pos: %lld)\n", count, *pos);
+	print_pmod_dev_info(dev);
 
-	// Clear current device buffer if we're writing to the start of the file
-	if(*pos == 0)
-		memset(dev->data, 0, device_buffer_size);
-
-	// Make sure writing pos is within the buffer
-	if(*pos >= device_buffer_size) {
-		printk(KERN_INFO "pmod:\t\tWrite position larger than buffer. Returning error.\n");
-		return -ENOMEM; // No more memory to write in the buffer
+	// If the write pos is 0, empty the device data 
+	if(*pos == 0) {
+		printk(KERN_INFO "pmod:\twriting at position 0, so we're emptying the device first");
+		pmod_trim(dev);
 	}
 
-	// Make sure writing bound is within the buffer
-	if(*pos + count > device_buffer_size) {
-		count = device_buffer_size - *pos;
-		printk(KERN_INFO "pmod:\t\tWrite bounds outside buffer. Trimming write size: %ld\n", count);
+	// Get block number and pos
+	block_num = (long) *pos / data_block_size;
+	block_pos = (long) *pos % data_block_size;
+
+	printk(KERN_INFO "pmod:\tblock_num=%d, block_pos=%d\n", block_num, block_pos);
+
+	// Grab pointer to block based on block number
+	block = pmod_get_block(dev, block_num);
+	if(!block) 
+		return -ENOMEM;
+
+	printk(KERN_INFO "pmod:\twrite found block %p\n", block);
+
+	// Make sure block data memory is allocated
+	if(!block->block_data) {
+		printk(KERN_INFO "pmod:\tblock data was not allocated. attempting allocation...\n");
+		block->block_data = (char *) kmalloc(data_block_size * sizeof(char), GFP_KERNEL);
+		if(!block->block_data)
+			return -ENOMEM;
+		memset(block->block_data, 0, data_block_size * sizeof(char));
+		printk(KERN_INFO "pmod:\tblock data allocated (%ld)\n", data_block_size * sizeof(char));
 	}
+
+	// Only write to the end of the block
+	if(count > data_block_size - block_pos) {
+		count = data_block_size - block_pos;
+		printk(KERN_INFO "pmod:\ttrimming count to %ld\n", count);
+	}
+
+	printk(KERN_INFO "pmod:\tcopying data from user buffer to kernel buffer\n");
 
 	// Try to copy data
-	if(copy_from_user(dev->data + *pos, buff, count)) {
+	if(copy_from_user(block->block_data + block_pos, buf, count)) {
 		return -EFAULT;
 	}
 
 	// Increase file position pointer
 	*pos += count;
+
+	print_pmod_dev_info(dev);
 
 	// Return num of bytes read
 	return count;
@@ -142,13 +261,8 @@ static void init_pmod_dev(struct pmod_dev *dev, int devnum)
 	// Device is closed
 	dev->device_open = 0;
 
-	// Allocate memory for device data
-	dev->data = kmalloc(device_buffer_size, GFP_KERNEL);
-	if(!dev->data) {
-		printk(KERN_WARNING "pmod: Unable to allocate memory for device %d data\n", devnum);
-		return;
-	}
-	memset(dev->data, 0, device_buffer_size);
+	// Device starts with 0 blocks
+	dev->num_blocks = 0;
 
 	// Initialize and add the character device
 	cdev_init(&dev->cdev, &pmod_fops);
@@ -158,20 +272,10 @@ static void init_pmod_dev(struct pmod_dev *dev, int devnum)
 	// Check for errors
 	if(error) {
 		printk(KERN_WARNING "pmod: Error %d adding pmod device %d\n", error, devnum);
-		kfree(dev->data);
 	}
 	else {
 		printk(KERN_INFO "pmod: Added pmod device %d:%d\n", module_major, MINOR(this_dev));
 	}
-}
-
-static void cleanup_pmod_dev(struct pmod_dev *dev) 
-{
-	// Cleanup device data memory
-	if(dev->data) 
-		kfree(dev->data);
-	// Free cdev registration
-	cdev_del(&dev->cdev);
 }
 
 /*
@@ -230,7 +334,8 @@ void cleanup_module(void)
 	// Cleanup individual pdev devices
 	if(devices) {
 		for(i = 0; i < num_devices; i++) {
-			cleanup_pmod_dev(&devices[i]);
+			pmod_trim(devices + i);
+			cdev_del(&devices[i].cdev);
 		}
 		kfree(devices);
 	}
