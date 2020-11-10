@@ -5,6 +5,7 @@
 #include <linux/cdev.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/mutex.h>
 
 #include "pmod.h"
 
@@ -24,7 +25,6 @@ module_param(data_block_size, int, S_IRUGO);
 
 static dev_t dev_number;
 static struct pmod_dev *devices;
-static int device_open = 0;
 
 static void print_pmod_dev_info(struct pmod_dev *dev) 
 {
@@ -105,12 +105,6 @@ static int pmod_open(struct inode *inode, struct file *filp)
 
 	printk(KERN_INFO "pmod: pmod_open() called.");
 
-	// If the device is already open, we cannot open it again
-	if(device_open) {
-		printk(KERN_INFO "pmod:\t\tDevice in use. Access denied.\n");
-		return -EBUSY;
-	}
-
 	/* 
 	 * Move the pmod_dev struct for this device file into the
 	 * filp private data field. This allows us to access the
@@ -119,19 +113,12 @@ static int pmod_open(struct inode *inode, struct file *filp)
 	device = container_of(inode->i_cdev, struct pmod_dev, cdev);
 	filp->private_data = device;
 
-	// Increase internal mod use count
-	device_open++;
-
 	return 0;
 }
 
 static int pmod_release(struct inode *inode, struct file *filp)
 {
 	printk(KERN_INFO "pmod: pmod_release() called.\n");
-
-	// Decrease internal mod use count
-	device_open--;
-
 	return 0;	
 }
 
@@ -140,9 +127,15 @@ static ssize_t pmod_read(struct file *filp, char __user *buff, size_t count, lof
 	struct pmod_dev *dev = filp->private_data;
 	struct pmod_block *block;
 	int block_num, block_pos;
+	ssize_t retval;
 
 	printk(KERN_INFO "pmod: pmod_read() called (count: %ld, pos: %lld)\n", count, *pos);
 	print_pmod_dev_info(dev);
+
+	// Obtain device lock
+	printk(KERN_INFO "pmod:\ttrying to get lock from device mutex");
+	if(mutex_lock_interruptible(&dev->mut))
+		return -ERESTARTSYS;
 
 	// Get block number and pos
 	block_num = (long) *pos / data_block_size;
@@ -151,15 +144,19 @@ static ssize_t pmod_read(struct file *filp, char __user *buff, size_t count, lof
 	printk(KERN_INFO "pmod:\tblock_num=%d, block_pos=%d\n", block_num, block_pos);
 
 	// Make sure our device has the required number of blocks
-	if(dev->num_blocks <= block_num) 
-		return 0;
+	if(dev->num_blocks <= block_num) {
+		retval = 0;
+		goto out;
+	}
 
 	// Get the block
 	block = pmod_get_block(dev, block_num);
 
 	// Make sure the block has data
-	if(!block || !block->block_data)
-		return 0;
+	if(!block || !block->block_data) {
+		retval = 0;
+		goto out;
+	}
 
 	printk(KERN_INFO "pmod:\tread found block %p\n", block);
 
@@ -173,16 +170,22 @@ static ssize_t pmod_read(struct file *filp, char __user *buff, size_t count, lof
 
 	// Try to copy the data
 	if(copy_to_user(buff, block->block_data + block_pos, count)) {
-		return -EFAULT;
+		retval = -EFAULT;
+		goto out;
 	}
 
 	// Increase file position pointer
 	*pos += count;
+	retval = count;
 
 	print_pmod_dev_info(dev);
 
+out:
+	// Unlock 
+	mutex_unlock(&dev->mut);
+
 	// Return num of bytes read
-	return count;
+	return retval;
 }
 
 static ssize_t pmod_write(struct file *filp, const char __user *buf, size_t count, loff_t *pos)
@@ -190,9 +193,15 @@ static ssize_t pmod_write(struct file *filp, const char __user *buf, size_t coun
 	struct pmod_dev *dev = filp->private_data;
 	struct pmod_block *block;
 	int block_num, block_pos;
+	ssize_t retval;
 
 	printk(KERN_INFO "pmod: pmod_write() called (count: %ld, pos: %lld)\n", count, *pos);
 	print_pmod_dev_info(dev);
+
+	// Obtain device lock
+	printk(KERN_INFO "pmod:\ttrying to get lock from device mutex");
+	if(mutex_lock_interruptible(&dev->mut))
+		return -ERESTARTSYS;
 
 	// If the write pos is 0, empty the device data 
 	if(*pos == 0) {
@@ -208,8 +217,10 @@ static ssize_t pmod_write(struct file *filp, const char __user *buf, size_t coun
 
 	// Grab pointer to block based on block number
 	block = pmod_get_block(dev, block_num);
-	if(!block) 
-		return -ENOMEM;
+	if(!block) {
+		retval = -ENOMEM;
+		goto out;
+	}
 
 	printk(KERN_INFO "pmod:\twrite found block %p\n", block);
 
@@ -217,8 +228,10 @@ static ssize_t pmod_write(struct file *filp, const char __user *buf, size_t coun
 	if(!block->block_data) {
 		printk(KERN_INFO "pmod:\tblock data was not allocated. attempting allocation...\n");
 		block->block_data = (char *) kmalloc(data_block_size * sizeof(char), GFP_KERNEL);
-		if(!block->block_data)
-			return -ENOMEM;
+		if(!block->block_data) {
+			retval = -ENOMEM;
+			goto out;
+		}
 		memset(block->block_data, 0, data_block_size * sizeof(char));
 		printk(KERN_INFO "pmod:\tblock data allocated (%ld)\n", data_block_size * sizeof(char));
 	}
@@ -233,16 +246,22 @@ static ssize_t pmod_write(struct file *filp, const char __user *buf, size_t coun
 
 	// Try to copy data
 	if(copy_from_user(block->block_data + block_pos, buf, count)) {
-		return -EFAULT;
+		retval = -EFAULT;
+		goto out;
 	}
 
 	// Increase file position pointer
 	*pos += count;
+	retval = count;
 
 	print_pmod_dev_info(dev);
 
+out:
+	// Unlock
+	mutex_unlock(&dev->mut);
+
 	// Return num of bytes read
-	return count;
+	return retval;
 }
 
 static struct file_operations pmod_fops = {
@@ -258,11 +277,11 @@ static void init_pmod_dev(struct pmod_dev *dev, int devnum)
 	int error;
 	dev_t this_dev = MKDEV(module_major, module_minor + devnum);
 
-	// Device is closed
-	dev->device_open = 0;
-
 	// Device starts with 0 blocks
 	dev->num_blocks = 0;
+
+	// Initialize device semaphore
+	mutex_init(&dev->mut);
 
 	// Initialize and add the character device
 	cdev_init(&dev->cdev, &pmod_fops);

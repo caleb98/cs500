@@ -2,6 +2,7 @@
 #define _PMOD_H_
 
 #include <linux/cdev.h>
+#include <linux/mutex.h>
 
 #define DEVICE_NAME "pmod"
 #define MODULE_MAJOR 0
@@ -18,6 +19,7 @@ struct pmod_dev {
 	struct pmod_block *data;
 	int num_blocks;
 	int device_open;
+	struct mutex mut;
 	struct cdev cdev;
 };
 
