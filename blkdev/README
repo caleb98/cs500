@@ -1,4 +1,1 @@
-WIP block device driver
-
-TODO:
-	Continue implementation of setup_device() function
+A basic block device driver that works as a (mostly featureless) ramdisk.
